@@ -1,16 +1,42 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
 import xgboost as xgb
 import joblib
 
 
 def encode_df(df):
     ONE_HOT_COLUMNS = ['ProductCD', 'card4', 'card6', 'P_emaildomain', 'R_emaildomain']
-    df_dummies = pd.get_dummies(df, columns=ONE_HOT_COLUMNS, prefix=ONE_HOT_COLUMNS, dummy_na=True)
-    columns_to_fill = list(set(df.columns) - set(ONE_HOT_COLUMNS))
-    df_dummies[columns_to_fill] = df_dummies[columns_to_fill].fillna(df_dummies[columns_to_fill].median())
-    return df_dummies
+    NUMERIC_COLUMNS = [col for col in df.columns if col not in ONE_HOT_COLUMNS]
+    transformers = [
+        ('one_hot', OneHotEncoder(sparse_output=False, handle_unknown='ignore'), ONE_HOT_COLUMNS),
+        ('imputer', SimpleImputer(strategy='median'), NUMERIC_COLUMNS)
+    ]
+    preprocessor = ColumnTransformer(transformers, remainder='passthrough')
+    preprocessor.fit(df)
+
+    # Get the transformed data
+    encoded_data = preprocessor.transform(df)
+
+    # Get the one-hot encoded feature names
+    one_hot_encoder = preprocessor.named_transformers_['one_hot']
+    one_hot_feature_names = []
+    for col, cats in zip(ONE_HOT_COLUMNS, one_hot_encoder.categories_):
+        one_hot_feature_names.extend([f'{col}_{cat}' for cat in cats])
+
+    # Combine feature names
+    feature_names = one_hot_feature_names + NUMERIC_COLUMNS
+
+    # Create a DataFrame with the correct column names
+    encoded_df = pd.DataFrame(encoded_data, columns=feature_names)
+
+    # Save the preprocessor to a file
+    joblib.dump(preprocessor, 'encoder.pkl')
+
+    return encoded_df
 
 
 def train_model(X, y):
@@ -41,14 +67,13 @@ if __name__ == '__main__':
                'card4', 'card5', 'card6', 'addr1', 'addr2', 'dist1', 'dist2', 'P_emaildomain',
                'R_emaildomain', "V257", "V246", "V244", "V242", "V201", "V200", "V189", "V188", "V258", "V45",
                "V158", "V156", "V149", "V228", "V44", "V86", "V87", "V170", "V147", "V52"]
+
     train_txn = train_txn[COLUMNS]
-
+    y = train_txn['isFraud']
+    train_txn = train_txn.drop('isFraud', axis=1)
     # Encode data
-    encoded_df = encode_df(train_txn)
+    X = encode_df(train_txn)
 
-    # Split data
-    X = encoded_df.drop('isFraud', axis=1)
-    y = encoded_df['isFraud']
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42, stratify=y)
 
     # Train model
